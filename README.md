@@ -1,28 +1,8 @@
-# <img align="right" src="https://github.com/openvk/openvk/raw/master/Web/static/img/logo_shadow.png" alt="openvk" title="openvk" width="15%">OpenVK
 
-_[Русский](README_RU.md)_
-
-**OpenVK** is an attempt to create a simple CMS that ~~cosplays~~ imitates old VK. Code provided here is not stable yet.
-
-VKontakte belongs to Pavel Durov and VK Group.
-
-To be honest, we don't know whether it even works. However, this version is maintained and we will be happy to accept your bugreports [in our bug-tracker](https://github.com/openvk/openvk/projects/1). You should also be able to submit them using [ticketing system](https://openvk.su/support?act=new) (you will need an OVK account for this).
-
-## When's the release?
-
-We will release OpenVK as soon as it's ready. As for now you can:
-* `git clone` this repo's master branch (use `git pull` to update)
-* Grab a prebuilt OpenVK distro from [GitHub artifacts](https://nightly.link/openvk/archive/workflows/nightly/master/OpenVK%20Archive.zip)
-
-## Instances
-
-* **[openvk.su](https://openvk.su/)**
 * **[openvk.uk](https://openvk.uk)** - official mirror of openvk.su (<https://t.me/openvkch/1609>)
 * **[openvk.co](http://openvk.co)** - yet another official mirror of openvk.su without TLS (<https://t.me/openvkch/1654>)
 * [social.fetbuk.ru](http://social.fetbuk.ru/)
-* [vepurovk.xyz](http://vepurovk.xyz/)
-
-## Can I create my own OpenVK instance?
+* [vep
 
 Yes! And you're very welcome to.
 
