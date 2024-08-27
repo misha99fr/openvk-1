@@ -1,5 +1,6 @@
 <?php declare(strict_types=1);
 namespace openvk\Web\Presenters;
+use openvk\Web\Models\Repositories\{Posts, Comments};
 use MessagePack\MessagePack;
 use Chandler\Session\Session;
 
@@ -29,9 +30,10 @@ final class InternalAPIPresenter extends OpenVKPresenter
     
     function renderRoute(): void
     {
-        if($_SERVER["REQUEST_METHOD"] !== "POST")
+        if($_SERVER["REQUEST_METHOD"] !== "POST") {
+            header("HTTP/1.1 405 Method Not Allowed");
             exit("ты дебил это точка апи");
-        
+        }
         try {
             $input = (object) MessagePack::unpack(file_get_contents("php://input"));
         } catch (\Exception $ex) {
@@ -71,25 +73,63 @@ final class InternalAPIPresenter extends OpenVKPresenter
     }
 
     function renderTimezone() {
-        if($_SERVER["REQUEST_METHOD"] !== "POST")
+        if($_SERVER["REQUEST_METHOD"] !== "POST") {
+            header("HTTP/1.1 405 Method Not Allowed");
             exit("ты дебил это метод апи");
-
+        }
         $sessionOffset = Session::i()->get("_timezoneOffset");
         if(is_numeric($this->postParam("timezone", false))) {
             $postTZ = intval($this->postParam("timezone", false));
             if ($postTZ != $sessionOffset || $sessionOffset == null) {
                 Session::i()->set("_timezoneOffset", $postTZ ? $postTZ : 3 * MINUTE );
                 $this->returnJson([
-                    "success" => 1 // If it's new value
+                    "success" => 1 # If it's new value
                 ]);
             } else {
                 $this->returnJson([
-                    "success" => 2 // If it's the same value (if for some reason server will call this func)
+                    "success" => 2 # If it's the same value (if for some reason server will call this func)
                 ]);
             }
         } else {
             $this->returnJson([
                 "success" => 0
+            ]);
+        }
+    }
+
+    function renderGetPhotosFromPost(int $owner_id, int $post_id) {
+        if($_SERVER["REQUEST_METHOD"] !== "POST") {
+            header("HTTP/1.1 405 Method Not Allowed");
+            exit("иди нахуй заебал");
+        }
+
+        if($this->postParam("parentType", false) == "post") {
+            $post = (new Posts)->getPostById($owner_id, $post_id, true);
+        } else {
+            $post = (new Comments)->get($post_id);
+        }
+    
+
+        if(is_null($post)) {
+            $this->returnJson([
+                "success" => 0
+            ]);
+        } else {
+            $response = [];
+            $attachments = $post->getChildren();
+            foreach($attachments as $attachment) 
+            {
+                if($attachment instanceof \openvk\Web\Models\Entities\Photo)
+                {
+                    $response[] = [
+                        "url" => $attachment->getURLBySizeId('normal'),
+                        "id"  => $attachment->getPrettyId()
+                    ];
+                }
+            }
+            $this->returnJson([
+                "success" => 1,
+                "body" => $response
             ]);
         }
     }

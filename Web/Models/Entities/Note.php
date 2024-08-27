@@ -74,9 +74,19 @@ class Note extends Postable
         $config->set("Attr.AllowedClasses", [
             "underline",
         ]);
+    
+        $source = NULL;
+        if(is_null($this->getRecord())) {
+            if(isset($this->changes["source"]))
+                $source = $this->changes["source"];
+            else
+                throw new \LogicException("Can't render note without content set.");
+        } else {
+            $source = $this->getRecord()->source;
+        }
         
         $purifier = new HTMLPurifier($config);
-        return $purifier->purify($this->getRecord()->source);
+        return $purifier->purify($source);
     }
     
     function getName(): string
@@ -91,6 +101,9 @@ class Note extends Postable
     
     function getText(): string
     {
+        if(is_null($this->getRecord()))
+            return $this->renderHTML();
+        
         $cached = $this->getRecord()->cached_content;
         if(!$cached) {
             $cached = $this->renderHTML();
@@ -104,5 +117,34 @@ class Note extends Postable
     function getSource(): string
     {
         return $this->getRecord()->source;
+    }
+    
+    function canBeViewedBy(?User $user = NULL): bool
+    {
+        if($this->isDeleted() || $this->getOwner()->isDeleted()) {
+            return false;
+        }
+
+        return $this->getOwner()->getPrivacyPermission('notes.read', $user) && $this->getOwner()->canBeViewedBy($user);
+    }
+
+    function toVkApiStruct(): object
+    {
+        $res = (object) [];
+
+        $res->type          = "note";
+        $res->id            = $this->getVirtualId();
+        $res->owner_id      = $this->getOwner()->getId();
+        $res->title         = $this->getName();
+        $res->text          = $this->getText();
+        $res->date          = $this->getPublicationTime()->timestamp();
+        $res->comments      = $this->getCommentsCount();
+        $res->read_comments = $this->getCommentsCount();
+        $res->view_url      = "/note".$this->getOwner()->getId()."_".$this->getVirtualId();
+        $res->privacy_view  = 1;
+        $res->can_comment   = 1;
+        $res->text_wiki     = "r";
+
+        return $res;
     }
 }

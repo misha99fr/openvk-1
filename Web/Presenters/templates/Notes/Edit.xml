@@ -3,7 +3,7 @@
 {block title}{_edit_note}{/block}
 
 {block header}
-    {var author = $note->getOwner()}
+    {var $author = $note->getOwner()}
     <a href="{$author->getURL()}">{$author->getCanonicalName()}</a>
     »
     <a href="/notes{$author->getId()}">{_notes}</a>
@@ -18,7 +18,7 @@
         <textarea name="html" style="display:none;"></textarea>
         <div id="editor" style="width:600px;height:300px;border:1px solid grey"></div>
         
-        <p><i><a href="/kb/notes">Кое-что</a> из (X)HTML поддерживается.</i></p>
+        <p><i><a href="/kb/notes">{_something}</a> {_supports_xhtml}</i></p>
         
         <input type="hidden" name="hash" value="{$csrfToken}" />
         <button class="button">{_save}</button>

@@ -6,6 +6,7 @@ use openvk\VKAPI\Exceptions\APIErrorException;
 use openvk\Web\Models\Entities\{User, APIToken};
 use openvk\Web\Models\Repositories\{Users, APITokens};
 use lfkeitel\phptotp\{Base32, Totp};
+use WhichBrowser;
 
 final class VKAPIPresenter extends OpenVKPresenter
 {
@@ -39,6 +40,24 @@ final class VKAPIPresenter extends OpenVKPresenter
         
         foreach($_GET as $key => $value)
             array_unshift($payload["request_params"], [ "key" => $key, "value" => $value ]);
+        
+        exit(json_encode($payload));
+    }
+
+    private function twofaFail(int $userId): void
+    {
+        header("HTTP/1.1 401 Unauthorized");
+        header("Content-Type: application/json");
+        
+        $payload = [
+            "error"             => "need_validation",
+            "error_description" => "use app code",
+            "validation_type"   => "2fa_app",
+            "validation_sid"    => "2fa_".$userId."_2839041_randommessdontread",
+            "phone_mask"        => "+374 ** *** 420",
+            "redirect_url"      => "https://http.cat/418", // Not implemented yet :( So there is a photo of cat :3
+            "validation_resend" => "nowhere"
+        ];
         
         exit(json_encode($payload));
     }
@@ -80,20 +99,21 @@ final class VKAPIPresenter extends OpenVKPresenter
 
     function renderPhotoUpload(string $signature): void
     {
-        $secret = CHANDLER_ROOT_CONF["security"]["secret"];
-        $computedSignature = hash_hmac("sha3-224", $_SERVER["QUERY_STRING"], $secret);
+        $secret            = CHANDLER_ROOT_CONF["security"]["secret"];
+        $queryString       = rawurldecode($_SERVER["QUERY_STRING"]);
+        $computedSignature = hash_hmac("sha3-224", $queryString, $secret);
         if(!(strlen($signature) == 56 && sodium_memcmp($signature, $computedSignature) == 0)) {
             header("HTTP/1.1 422 Unprocessable Entity");
             exit("Try harder <3");
         }
 
-        $data = unpack("vDOMAIN/Z10FIELD/vMF/vMP/PTIME/PUSER/PGROUP", base64_decode($_SERVER["QUERY_STRING"]));
+        $data = unpack("vDOMAIN/Z10FIELD/vMF/vMP/PTIME/PUSER/PGROUP", base64_decode($queryString));
         if((time() - $data["TIME"]) > 600) {
             header("HTTP/1.1 422 Unprocessable Entity");
             exit("Expired");
         }
 
-        $folder   = __DIR__ . "../../tmp/api-storage/photos";
+        $folder   = __DIR__ . "/../../tmp/api-storage/photos";
         $maxSize  = OPENVK_ROOT_CONF["openvk"]["preferences"]["uploads"]["api"]["maxFileSize"];
         $maxFiles = OPENVK_ROOT_CONF["openvk"]["preferences"]["uploads"]["api"]["maxFilesPerDomain"];
         $usrFiles = sizeof(glob("$folder/$data[USER]_*.oct"));
@@ -177,19 +197,24 @@ final class VKAPIPresenter extends OpenVKPresenter
                 $identity = NULL;
             } else {
                 $token = (new APITokens)->getByCode($this->requestParam("access_token"));
-                if(!$token)
+                if(!$token) {
                     $identity = NULL;
-                else
+                } else {
                     $identity = $token->getUser();
+                    $platform = $token->getPlatform();
+                }
             }
         }
+        
+        if(!is_null($identity) && $identity->isBanned())
+            $this->fail(18, "User account is deactivated", $object, $method);
         
         $object       = ucfirst(strtolower($object));
         $handlerClass = "openvk\\VKAPI\\Handlers\\$object";
         if(!class_exists($handlerClass))
             $this->badMethod($object, $method);
         
-        $handler = new $handlerClass($identity);
+        $handler = new $handlerClass($identity, $platform);
         if(!is_callable([$handler, $method]))
             $this->badMethod($object, $method);
         
@@ -208,8 +233,19 @@ final class VKAPIPresenter extends OpenVKPresenter
                     $this->badMethodCall($object, $method, $parameter->getName());
             }
             
-            settype($val, $parameter->getType()->getName());
-            $params[] = $val;
+            try {
+                // Проверка типа параметра
+                $type = $parameter->getType();
+                if (($type && !$type->isBuiltin()) || is_null($val)) {
+                    $params[] = $val; 
+                } else {
+                    settype($val, $parameter->getType()->getName());
+                    $params[] = $val;
+                }
+            } catch (\Throwable $e) {
+                // Just ignore the exception, since
+                // some args are intended for internal use
+            }
         }
         
         define("VKAPI_DECL_VER", $this->requestParam("v") ?? "4.100", false);
@@ -249,22 +285,81 @@ final class VKAPIPresenter extends OpenVKPresenter
         $user = (new Users)->get($uId);
 
         $code = $this->requestParam("code");
-        if($user->is2faEnabled() && !($code === (new Totp)->GenerateToken(Base32::decode($user->get2faSecret())) || $user->use2faBackupCode((int) $code)))
-            $this->fail(28, "Invalid 2FA code", "internal", "acquireToken");
+        if($user->is2faEnabled() && !($code === (new Totp)->GenerateToken(Base32::decode($user->get2faSecret())) || $user->use2faBackupCode((int) $code))) {
+            if($this->requestParam("2fa_supported") == "1")
+                $this->twofaFail($user->getId());
+            else
+                $this->fail(28, "Invalid 2FA code", "internal", "acquireToken");
+        }
         
-        $token = new APIToken;
-        $token->setUser($user);
-        $token->save();
+        $token        = NULL;
+        $tokenIsStale = true;
+        $platform     = $this->requestParam("client_name");
+        $acceptsStale = $this->requestParam("accepts_stale");
+        if($acceptsStale == "1") {
+            if(is_null($platform))
+                $this->fail(101, "accepts_stale can only be used with explicitly set client_name", "internal", "acquireToken");
+            
+            $token = (new APITokens)->getStaleByUser($uId, $platform);
+        }
+        
+        if(is_null($token)) {
+            $tokenIsStale = false;
+            
+            $token = new APIToken;
+            $token->setUser($user);
+            $token->setPlatform($platform ?? (new WhichBrowser\Parser(getallheaders()))->toString());
+            $token->save();
+        }
         
         $payload = json_encode([
             "access_token" => $token->getFormattedToken(),
             "expires_in"   => 0,
             "user_id"      => $uId,
+            "is_stale"     => $tokenIsStale,
         ]);
         
         $size = strlen($payload);
         header("Content-Type: application/json");
         header("Content-Length: $size");
         exit($payload);
+    }
+    
+    function renderOAuthLogin() {
+        $this->assertUserLoggedIn();
+        
+        $client  = $this->queryParam("client_name");
+        $postmsg = $this->queryParam("prefers_postMessage") ?? '0';
+        $stale   = $this->queryParam("accepts_stale") ?? '0';
+        $origin  = NULL;
+        $url     = $this->queryParam("redirect_uri");
+        if(is_null($url) || is_null($client))
+            exit("<b>Error:</b> redirect_uri and client_name params are required.");
+        
+        if($url != "about:blank") {
+            if(!filter_var($url, FILTER_VALIDATE_URL))
+                exit("<b>Error:</b> Invalid URL passed to redirect_uri.");
+            
+            $parsedUrl = (object) parse_url($url);
+            if($parsedUrl->scheme != 'https' && $parsedUrl->scheme != 'http')
+                exit("<b>Error:</b> redirect_uri should either point to about:blank or to a web resource.");
+            
+            $origin = "$parsedUrl->scheme://$parsedUrl->host";
+            if(!is_null($parsedUrl->port ?? NULL))
+                $origin .= ":$parsedUrl->port";
+            
+            $url .= strpos($url, '?') === false ? '?' : '&';
+        } else {
+            $url .= "#";
+            if($postmsg == '1') {
+                exit("<b>Error:</b> prefers_postMessage can only be set if redirect_uri is not about:blank");
+            }
+        }
+        
+        $this->template->clientName     = $client;
+        $this->template->usePostMessage = $postmsg == '1';
+        $this->template->acceptsStale   = $stale == '1';
+        $this->template->origin         = $origin;
+        $this->template->redirectUri    = $url;
     }
 }

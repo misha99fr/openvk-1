@@ -1,13 +1,13 @@
 <?php declare(strict_types=1);
 namespace openvk\Web\Presenters;
-use openvk\Web\Models\Repositories\Users;
-use openvk\Web\Models\Repositories\Notes;
+use openvk\Web\Models\Repositories\{Users, Notes};
 use openvk\Web\Models\Entities\Note;
 
 final class NotesPresenter extends OpenVKPresenter
 {
     private $notes;
-    
+    protected $presenterName = "notes";
+
     function __construct(Notes $notes)
     {
         $this->notes = $notes;
@@ -40,11 +40,36 @@ final class NotesPresenter extends OpenVKPresenter
             $this->notFound();
         if(!$note->getOwner()->getPrivacyPermission('notes.read', $this->user->identity ?? NULL))
             $this->flashFail("err", tr("forbidden"), tr("forbidden_comment"));
+        if(!$note->canBeViewedBy($this->user->identity))
+            $this->flashFail("err", tr("forbidden"), tr("forbidden_comment"));
         
         $this->template->cCount   = $note->getCommentsCount();
         $this->template->cPage    = (int) ($this->queryParam("p") ?? 1);
         $this->template->comments = iterator_to_array($note->getComments($this->template->cPage));
         $this->template->note     = $note;
+    }
+    
+    function renderPreView(): void
+    {
+        $this->assertUserLoggedIn();
+        $this->willExecuteWriteAction();
+    
+        if($_SERVER["REQUEST_METHOD"] !== "POST") {
+            header("HTTP/1.1 400 Bad Request");
+            exit;
+        }
+        
+        if(empty($this->postParam("html")) || empty($this->postParam("title"))) {
+            header("HTTP/1.1 400 Bad Request");
+            exit(tr("note_preview_empty_err"));
+        }
+    
+        $note = new Note;
+        $note->setSource($this->postParam("html"));
+        
+        $this->flash("info", tr("note_preview_warn"), tr("note_preview_warn_details"));
+        $this->template->title = $this->postParam("title");
+        $this->template->html  = $note->getText();
     }
     
     function renderCreate(): void
@@ -84,7 +109,7 @@ final class NotesPresenter extends OpenVKPresenter
         if(!$note || $note->getOwner()->getId() !== $owner || $note->isDeleted())
             $this->notFound();
         if(is_null($this->user) || !$note->canBeModifiedBy($this->user->identity))
-            $this->flashFail("err", "Ошибка доступа", "Недостаточно прав для модификации данного ресурса.");
+            $this->flashFail("err", tr("error_access_denied_short"), tr("error_access_denied"));
         $this->template->note = $note;
             
         if($_SERVER["REQUEST_METHOD"] === "POST") {
@@ -112,11 +137,11 @@ final class NotesPresenter extends OpenVKPresenter
         if(!$note) $this->notFound();
         if($note->getOwner()->getId() . "_" . $note->getId() !== $owner . "_" . $id || $note->isDeleted()) $this->notFound();
         if(is_null($this->user) || !$note->canBeModifiedBy($this->user->identity))
-            $this->flashFail("err", "Ошибка доступа", "Недостаточно прав для модификации данного ресурса.");
+            $this->flashFail("err", tr("error_access_denied_short"), tr("error_access_denied"));
         
         $name = $note->getName();
         $note->delete();
-        $this->flash("succ", "Заметка удалена", "Заметка \"$name\" была успешно удалена.");
+        $this->flash("succ", tr("note_is_deleted"), tr("note_x_is_now_deleted", $name));
         $this->redirect("/notes" . $this->user->id);
     }
 }

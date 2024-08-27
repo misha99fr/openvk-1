@@ -1,8 +1,8 @@
 {extends "../@layout.xml"}
-{block title}{_"select_language"}{/block}
+{block title}{_select_language}{/block}
 
 {block header}
-    {_"select_language"}
+    {_select_language}
 {/block}
 
 {block content}
@@ -15,7 +15,7 @@
 
         .navigation-lang .link_new {
             display: inline-block;
-            padding: 25px 25px 20px 25px;
+            padding: 20px 10px 5px 10px;
             text-decoration: none;
             border-top: 1px solid #fff;
             color: #000;
@@ -40,7 +40,7 @@
             {var $result = preg_match("/(.+)\((.+)\)/", $language['native_name'], $name)}
 
             <a href="language?lg={$language['code']}&hash={urlencode($csrfToken)}" class="link_new" rel="nofollow">
-                <center><img src="/assets/packages/static/openvk/img/flags/{$language['flag']}.gif"></center>
+                <center><img src="/assets/packages/static/openvk/img/flags/{$language['flag']}.gif" alt="{$language['native_name']}"></center>
                 <br>
                 {if $result == 1}
                     {$name[1]}

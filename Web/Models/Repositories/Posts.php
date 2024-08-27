@@ -58,10 +58,55 @@ class Posts
         }
         
         $sel = $this->posts->where([
-            "wall"    => $user,
-            "pinned"  => false,
-            "deleted" => false,
+            "wall"      => $user,
+            "pinned"    => false,
+            "deleted"   => false,
+            "suggested" => 0,
         ])->order("created DESC")->limit($perPage, $offset);
+        
+        foreach($sel as $post)
+            yield new Post($post);
+    }
+
+    function getOwnersPostsFromWall(int $user, int $page = 1, ?int $perPage = NULL, ?int $offset = NULL): \Traversable
+    {
+        $perPage ??= OPENVK_DEFAULT_PER_PAGE;
+        $offset ??= $perPage * ($page - 1);
+
+        $sel = $this->posts->where([
+            "wall"      => $user,
+            "deleted"   => false,
+            "suggested" => 0,
+        ]);
+        
+        if($user > 0)
+            $sel->where("owner", $user);
+        else
+            $sel->where("flags !=", 0);
+
+        $sel->order("created DESC")->limit($perPage, $offset);
+        
+        foreach($sel as $post)
+            yield new Post($post);
+    }
+
+    function getOthersPostsFromWall(int $user, int $page = 1, ?int $perPage = NULL, ?int $offset = NULL): \Traversable
+    {
+        $perPage ??= OPENVK_DEFAULT_PER_PAGE;
+        $offset ??= $perPage * ($page - 1);
+
+        $sel = $this->posts->where([
+            "wall"      => $user,
+            "deleted"   => false,
+            "suggested" => 0,
+        ]);
+        
+        if($user > 0)
+            $sel->where("owner !=", $user);
+        else
+            $sel->where("flags", 0);
+        
+        $sel->order("created DESC")->limit($perPage, $offset);
         
         foreach($sel as $post)
             yield new Post($post);
@@ -71,9 +116,10 @@ class Posts
     {
         $hashtag = "#$hashtag";
         $sel = $this->posts
-                    ->where("content LIKE ?", "%$hashtag%")
+                    ->where("MATCH (content) AGAINST (? IN BOOLEAN MODE)", "+$hashtag")
                     ->where("deleted", 0)
                     ->order("created DESC")
+                    ->where("suggested", 0)
                     ->page($page, $perPage ?? OPENVK_DEFAULT_PER_PAGE);
         
         foreach($sel as $post)
@@ -85,28 +131,127 @@ class Posts
         $hashtag = "#$hashtag";
         $sel = $this->posts
                     ->where("content LIKE ?", "%$hashtag%")
-                    ->where("deleted", 0);
+                    ->where("deleted", 0)
+                    ->where("suggested", 0);
         
         return sizeof($sel);
     }
     
-    function getPostById(int $wall, int $post): ?Post
+    function getPostById(int $wall, int $post, bool $forceSuggestion = false): ?Post
     {
-        $post = $this->posts->where(['wall' => $wall, 'virtual_id' => $post])->fetch();
+        $post = $this->posts->where(['wall' => $wall, 'virtual_id' => $post]);
+
+        if(!$forceSuggestion) {
+            $post->where("suggested", 0);
+        }
+
+        $post = $post->fetch();
+
         if(!is_null($post))
             return new Post($post);
         else
-            return null;
+            return NULL;
         
     }
-    
+
+    function find(string $query = "", array $pars = [], string $sort = "id"): Util\EntityStream
+    {
+        $query  = "%$query%";
+
+        $notNullParams = [];
+
+        foreach($pars as $paramName => $paramValue)
+            if($paramName != "before" && $paramName != "after")
+                $paramValue != NULL ? $notNullParams+=["$paramName" => "%$paramValue%"]   : NULL;
+            else
+                $paramValue != NULL ? $notNullParams+=["$paramName" => "$paramValue"]     : NULL;
+
+        $result = $this->posts->where("content LIKE ?", $query)->where("deleted", 0)->where("suggested", 0);
+        $nnparamsCount = sizeof($notNullParams);
+
+        if($nnparamsCount > 0) {
+            foreach($notNullParams as $paramName => $paramValue) {
+                switch($paramName) {
+                    case "before":
+                        $result->where("created < ?", $paramValue);
+                        break;
+                    case "after":
+                        $result->where("created > ?", $paramValue);
+                        break;
+                }
+            }
+        }
+
+
+        return new Util\EntityStream("Post", $result->order("$sort"));
+    }
+
     function getPostCountOnUserWall(int $user): int
     {
-        return sizeof($this->posts->where(["wall" => $user, "deleted" => 0]));
+        return sizeof($this->posts->where(["wall" => $user, "deleted" => 0, "suggested" => 0]));
+    }
+
+    function getOwnersCountOnUserWall(int $user): int
+    {
+        if($user > 0)
+            return sizeof($this->posts->where(["wall" => $user, "deleted" => 0, "owner" => $user]));
+        else
+            return sizeof($this->posts->where(["wall" => $user, "deleted" => 0, "suggested" => 0])->where("flags !=", 0));
+    }
+
+    function getOthersCountOnUserWall(int $user): int
+    {
+        if($user > 0)
+            return sizeof($this->posts->where(["wall" => $user, "deleted" => 0])->where("owner !=", $user));
+        else
+            return sizeof($this->posts->where(["wall" => $user, "deleted" => 0, "suggested" => 0])->where("flags", 0));
+    }
+
+    function getSuggestedPosts(int $club, int $page = 1, ?int $perPage = NULL, ?int $offset = NULL): \Traversable
+    {
+        $perPage ??= OPENVK_DEFAULT_PER_PAGE;
+        $offset ??= $perPage * ($page - 1);
+
+        $sel = $this->posts
+                    ->where("deleted", 0)
+                    ->where("wall", $club * -1)
+                    ->order("created DESC")
+                    ->where("suggested", 1)
+                    ->limit($perPage, $offset);
+        
+        foreach($sel as $post)
+            yield new Post($post);
+    }
+
+    function getSuggestedPostsCount(int $club)
+    {
+        return sizeof($this->posts->where(["wall" => $club * -1, "deleted" => 0, "suggested" => 1]));
+    }
+
+    function getSuggestedPostsByUser(int $club, int $user, int $page = 1, ?int $perPage = NULL, ?int $offset = NULL): \Traversable
+    {
+        $perPage ??= OPENVK_DEFAULT_PER_PAGE;
+        $offset ??= $perPage * ($page - 1);
+
+        $sel = $this->posts
+                    ->where("deleted", 0)
+                    ->where("wall", $club * -1)
+                    ->where("owner", $user)
+                    ->order("created DESC")
+                    ->where("suggested", 1)
+                    ->limit($perPage, $offset);
+        
+        foreach($sel as $post)
+            yield new Post($post);
+    }
+
+    function getSuggestedPostsCountByUser(int $club, int $user): int
+    {  
+        return sizeof($this->posts->where(["wall" => $club * -1, "deleted" => 0, "suggested" => 1, "owner" => $user]));
     }
 
     function getCount(): int
     {
-        return sizeof(clone $this->posts);
+        return (clone $this->posts)->count('*');
     }
 }

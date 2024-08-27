@@ -1,16 +1,17 @@
 <?php declare(strict_types=1);
 namespace openvk\Web\Presenters;
-use openvk\Web\Models\Entities\Ticket;
-use openvk\Web\Models\Repositories\{Tickets, Users};
-use openvk\Web\Models\Entities\TicketComment;
-use openvk\Web\Models\Repositories\TicketComments;
+use openvk\Web\Models\Entities\{SupportAgent, Ticket, TicketComment};
+use openvk\Web\Models\Repositories\{Tickets, Users, TicketComments, SupportAgents};
 use openvk\Web\Util\Telegram;
 use Chandler\Session\Session;
+use Chandler\Database\DatabaseConnection;
 use Parsedown;
 
 final class SupportPresenter extends OpenVKPresenter
 {
     protected $banTolerant = true;
+    protected $deactivationTolerant = true;
+    protected $presenterName = "support";
     
     private $tickets;
     private $comments;
@@ -28,10 +29,45 @@ final class SupportPresenter extends OpenVKPresenter
         $this->assertUserLoggedIn();
         $this->template->mode = in_array($this->queryParam("act"), ["faq", "new", "list"]) ? $this->queryParam("act") : "faq";
 
+        if($this->template->mode === "faq") {
+            $lang = Session::i()->get("lang", "ru");
+            $base = OPENVK_ROOT . "/data/knowledgebase/faq";
+            if(file_exists("$base.$lang.md"))
+                $file = "$base.$lang.md";
+            else if(file_exists("$base.md"))
+                $file = "$base.md";
+            else
+                $file = NULL;
+
+            if(is_null($file)) {
+                $this->template->faq = [];
+            } else {
+                $lines = file($file);
+                $faq   = [];
+                $index = 0;
+
+                foreach($lines as $line) {
+                    if(strpos($line, "# ") === 0)
+                        ++$index;
+
+                    $faq[$index][] = $line;
+                }
+
+                $this->template->faq = array_map(function($section) {
+                    $title = substr($section[0], 2);
+                    array_shift($section);
+                    return [
+                        $title,
+                        (new Parsedown())->text(implode("\n", $section))
+                    ];
+                }, $faq);
+            }
+        }
+
         $this->template->count = $this->tickets->getTicketsCountByUserId($this->user->id);
         if($this->template->mode === "list") {
             $this->template->page    = (int) ($this->queryParam("p") ?? 1);
-            $this->template->tickets = $this->tickets->getTicketsByUserId($this->user->id, $this->template->page);
+            $this->template->tickets = iterator_to_array($this->tickets->getTicketsByUserId($this->user->id, $this->template->page));
         }
 
         if($this->template->mode === "new")
@@ -63,8 +99,7 @@ final class SupportPresenter extends OpenVKPresenter
                     Telegram::send($helpdeskChat, $telegramText);
                 }
 
-                header("HTTP/1.1 302 Found");
-                header("Location: /support/view/" . $ticket->getId());
+                $this->redirect("/support/view/" . $ticket->getId());
             } else {
                 $this->flashFail("err", tr("error"), tr("you_have_not_entered_name_or_text"));
             }
@@ -79,12 +114,13 @@ final class SupportPresenter extends OpenVKPresenter
         $act = $this->queryParam("act") ?? "open";
         switch($act) {
             default:
+                # NOTICE falling through
             case "open":
                 $state = 0;
-            break;
+                break;
             case "answered":
                 $state = 1;
-            break;
+                break;
             case "closed":
                 $state = 2;
         }
@@ -120,11 +156,12 @@ final class SupportPresenter extends OpenVKPresenter
                 $this->notFound();
             } else {
                 if($ticket->getUserId() !== $this->user->id && $this->hasPermission('openvk\Web\Models\Entities\TicketReply', 'write', 0))
-                    $this->redirect("/support/tickets");
+                    $_redirect = "/support/tickets";
                 else
-                    $this->redirect("/support");
+                    $_redirect = "/support?act=list";
 
                 $ticket->delete();
+                $this->redirect($_redirect);
             }
         }
     }
@@ -154,8 +191,7 @@ final class SupportPresenter extends OpenVKPresenter
                 $comment->setCreated(time());
                 $comment->save();
                 
-                header("HTTP/1.1 302 Found");
-                header("Location: /support/view/" . $id);
+                $this->redirect("/support/view/" . $id);
             } else {
                 $this->flashFail("err", tr("error"), tr("you_have_not_entered_text"));
             }
@@ -286,6 +322,10 @@ final class SupportPresenter extends OpenVKPresenter
         
         $user->setBlock_In_Support_Reason($this->queryParam("reason"));
         $user->save();
+
+        if($this->queryParam("close_tickets"))
+            DatabaseConnection::i()->getConnection()->query("UPDATE tickets SET type = 2 WHERE user_id = ".$id);
+
         $this->returnJson([ "success" => true, "reason" => $this->queryParam("reason") ]);
     }
 
@@ -301,5 +341,79 @@ final class SupportPresenter extends OpenVKPresenter
         $user->setBlock_In_Support_Reason(null);
         $user->save();
         $this->returnJson([ "success" => true ]);
+    }
+
+    function renderAgent(int $id): void
+    {
+        $this->assertPermission("openvk\Web\Models\Entities\TicketReply", "write", 0);
+
+        $support_names = new SupportAgents;
+
+        if(!$support_names->isExists($id))
+            $this->template->mode = "edit";
+
+        $this->template->agent_id    = $id;
+        $this->template->mode        = in_array($this->queryParam("act"), ["info", "edit"]) ? $this->queryParam("act") : "info";
+        $this->template->agent       = $support_names->get($id) ?? NULL;
+        $this->template->counters    = [
+          "all"    => (new TicketComments)->getCountByAgent($id),
+          "good"   => (new TicketComments)->getCountByAgent($id, 1),
+          "bad"    => (new TicketComments)->getCountByAgent($id, 2)
+        ];
+
+        if($id != $this->user->identity->getId())
+            if ($support_names->isExists($id))
+                $this->template->mode = "info";
+            else
+                $this->redirect("/support/agent" . $this->user->identity->getId());
+    }
+
+    function renderEditAgent(int $id): void
+    {
+        $this->assertPermission("openvk\Web\Models\Entities\TicketReply", "write", 0);
+        $this->assertNoCSRF();
+
+        $support_names = new SupportAgents;
+        $agent = $support_names->get($id);
+
+        if($agent)
+            if($agent->getAgentId() != $this->user->identity->getId()) $this->flashFail("err", tr("error"), tr("forbidden"));
+
+        if ($support_names->isExists($id)) {
+            $agent = $support_names->get($id);
+            $agent->setName($this->postParam("name") ?? tr("helpdesk_agent"));
+            $agent->setNumerate((int) $this->postParam("number") ?? NULL);
+            $agent->setIcon($this->postParam("avatar"));
+            $agent->save();
+            $this->flashFail("succ", tr("agent_profile_edited"));
+        } else {
+            $agent = new SupportAgent;
+            $agent->setAgent($this->user->identity->getId());
+            $agent->setName($this->postParam("name") ?? tr("helpdesk_agent"));
+            $agent->setNumerate((int) $this->postParam("number") ?? NULL);
+            $agent->setIcon($this->postParam("avatar"));
+            $agent->save();
+            $this->flashFail("succ", tr("agent_profile_created_1"), tr("agent_profile_created_2"));
+        }
+    }
+
+    function renderCloseTicket(int $id): void
+    {
+        $this->assertUserLoggedIn();
+        $this->assertNoCSRF();
+        $this->willExecuteWriteAction();
+
+        $ticket = $this->tickets->get($id);
+
+        if($ticket->isDeleted() === 1 || $ticket->getType() === 2 || $ticket->getUserId() !== $this->user->id) {
+            header("HTTP/1.1 403 Forbidden");
+            header("Location: /support/view/" . $id);
+            exit;
+        }
+
+        $ticket->setType(2);
+        $ticket->save();
+
+        $this->flashFail("succ", tr("ticket_changed"), tr("ticket_changed_comment"));
     }
 }

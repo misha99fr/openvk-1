@@ -1,5 +1,6 @@
 {php if(!isset($GLOBALS["textAreaCtr"])) $GLOBALS["textAreaCtr"] = 10;}
-{var textAreaId = ($post ?? NULL) === null ? (++$GLOBALS["textAreaCtr"]) : $post->getId()}
+{var $textAreaId = ($post ?? NULL) === NULL ? (++$GLOBALS["textAreaCtr"]) : $post->getId()}
+{var $textAreaId = ($custom_id ?? NULL) === NULL ? $textAreaId : $custom_id}
 
 <div id="write" style="padding: 5px 0;" onfocusin="expand_wall_textarea({$textAreaId});">
     <form action="{$route}" method="post" enctype="multipart/form-data" style="margin:0;">
@@ -8,12 +9,23 @@
             <!-- padding to fix <br/> bug -->
         </div>
         <div id="post-buttons{$textAreaId}" style="display: none;">
-            <div class="post-upload">
-                {_attachment}: <span>(unknown)</span>
+            <div class="upload">
+
             </div>
-            <div n:if="$postOpts ?? true" class="post-opts">
-                {var anonEnabled = OPENVK_ROOT_CONF['openvk']['preferences']['wall']['anonymousPosting']['enable']}
+            <div class="post-upload">
+                <span style="color: inherit;"></span>
+            </div>
+            <div class="post-has-poll">
+                {_poll}
+            </div>
+            <div class="post-has-note">
                 
+            </div>
+            <div class="post-has-videos"></div>
+            <div class="post-has-audios"></div>
+
+            <div n:if="$postOpts ?? true" class="post-opts">
+                {var $anonEnabled = OPENVK_ROOT_CONF['openvk']['preferences']['wall']['anonymousPosting']['enable']}
                 {if !is_null($thisUser) && !is_null($club ?? NULL) && $owner < 0}
                     {if $club->canBeModifiedBy($thisUser)}
                         <script>
@@ -43,34 +55,53 @@
                     <input type="checkbox" name="nsfw" /> {_contains_nsfw}
                 </label>
             </div>
+
             <div n:if="!($postOpts ?? true) && !is_null($thisUser) && !is_null($club ?? NULL) && $club->canBeModifiedBy($thisUser)" class="post-opts">
                 <label>
                     <input type="checkbox" name="as_group" /> {_comment_as_group}
                 </label>
             </div>
-            <input type="file" class="postFileSel" id="postFilePic" name="_pic_attachment" accept="image/*" style="display:none;" />
-            <input type="file" class="postFileSel" id="postFileVid" name="_vid_attachment" accept="video/*" style="display:none;" />
+            <input type="hidden" name="photos" value="" />
+            <input type="hidden" name="videos" value="" />
+            <input type="hidden" name="audios" value="" />
+            <input type="hidden" name="poll" value="none" />
+            <input type="hidden" id="note" name="note" value="none" />
             <input type="hidden" name="type" value="1" />
             <input type="hidden" name="hash" value="{$csrfToken}" />
             <br/>
             <input type="submit" value="{_write}" class="button" />
             <div style="float: right; display: flex; flex-direction: column;">
-                <a href="javascript:void(u('#post-buttons{$textAreaId} #wallAttachmentMenu').toggleClass('hidden'));">
+                <a href="javascript:toggleMenu({$textAreaId});">
                     {_attach}
                 </a>
                 
                 <div id="wallAttachmentMenu" class="hidden">
-                    <a href="javascript:void(document.querySelector('#post-buttons{$textAreaId} input[name=_pic_attachment]').click());">
-                        <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/mimetypes/application-x-egon.png" />
-                        {_attach_photo}
+                    <a class="header" href="javascript:toggleMenu({$textAreaId});">
+                        {_attach}
                     </a>
-                    <a href="javascript:void(document.querySelector('#post-buttons{$textAreaId} input[name=_vid_attachment]').click());">
+                    <a id="photosAttachments" {if !is_null($club ?? NULL) && $club->canBeModifiedBy($thisUser)}data-club="{$club->getId()}"{/if}>
+                        <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/mimetypes/application-x-egon.png" />
+                        {_photo}
+                    </a>
+                    <a id="videoAttachment">
                         <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/mimetypes/application-vnd.rn-realmedia.png" />
-                        {_attach_video}
+                        {_video}
+                    </a>
+                    <a id="_audioAttachment">
+                        <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/mimetypes/audio-ac3.png" />
+                        {_audio}
+                    </a>
+                    <a n:if="$notes ?? false" href="javascript:attachNote({$textAreaId})">
+                        <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/mimetypes/application-x-srt.png" />
+                        {_note}
                     </a>
                     <a n:if="$graffiti ?? false" href="javascript:initGraffiti({$textAreaId});">
                         <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/actions/draw-brush.png" />
-                        {_draw_graffiti}
+                        {_graffiti}
+                    </a>
+                    <a n:if="$polls ?? false" href="javascript:initPoll({$textAreaId})">
+                        <img src="/assets/packages/static/openvk/img/oxygen-icons/16x16/actions/office-chart-bar-stacked.png" />
+                        {_poll}
                     </a>
                 </div>
             </div>
@@ -80,12 +111,12 @@
 
 <script>
     $(document).ready(() => {
-        u("#post-buttons{$textAreaId} .postFileSel").on("change", function() {
-            handleUpload.bind(this, {$textAreaId})();
-        });
-
         setupWallPostInputHandlers({$textAreaId});
     });
+
+    u("#post-buttons{$textAreaId} input[name='videos']")["nodes"].at(0).value = ""
+    u("#post-buttons{$textAreaId} input[name='photos']")["nodes"].at(0).value = ""
+    u("#post-buttons{$textAreaId} input[name='audios']")["nodes"].at(0).value = ""
 </script>
 
 {if $graffiti}
